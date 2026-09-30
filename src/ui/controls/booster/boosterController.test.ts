@@ -94,10 +94,14 @@ function scriptPopupFor(document: Document, side: "shipA" | "shipB"): FakeElemen
   return field.children.find((child) => child.id === `${side === "shipA" ? "ship-a" : "ship-b"}-booster-script-popup`);
 }
 
+function findOptionByName(popup: FakeElement, name: string): FakeElement | undefined {
+  return popup.children.find((child) => child.children.some((grandchild) => grandchild.textContent?.includes(name)));
+}
+
 function firstRow(section: FakeElement): FakeElement | undefined {
   const block = section.children.find((child) => child.className === "preview-section") as FakeElement | undefined;
   const children = block?.children ?? section.children;
-  return children.find((child) => child.className.split(" ").includes("ewar-row"));
+  return children.find((child) => child.className.split(" ").includes("modules-row"));
 }
 
 describe("BoosterController", () => {
@@ -109,7 +113,7 @@ describe("BoosterController", () => {
     const block = section.children[0] as unknown as FakeElement;
     expect(block.className).toBe("preview-section");
     expect(block.children[0]?.textContent).toBe("label.booster.computer");
-    const rows = block.children.filter((child) => child.className.split(" ").includes("ewar-row"));
+    const rows = block.children.filter((child) => child.className.split(" ").includes("modules-row"));
     expect(rows).toHaveLength(2);
     expect(rows[0]?.children[0]?.getAttribute("aria-pressed")).toBe("true");
   });
@@ -119,7 +123,7 @@ describe("BoosterController", () => {
     controller.setLoadout("shipA", LOADOUT);
     const section = boosterEls.sections.shipA as unknown as FakeElement;
     const block = section.children[0] as unknown as FakeElement;
-    const rows = block.children.filter((child) => child.className.split(" ").includes("ewar-row"));
+    const rows = block.children.filter((child) => child.className.split(" ").includes("modules-row"));
     const firstButton = rows[0]?.children[0] as unknown as FakeElement;
     const nameSpan = firstButton.children[1] as unknown as FakeElement;
     expect(firstButton.getAttribute("data-hint-content")).toBe("module");
@@ -143,7 +147,7 @@ describe("BoosterController", () => {
     const button = row.children[0] as FakeElement;
     button.trigger("click");
     expect(button.getAttribute("aria-pressed")).toBe("false");
-    expect(row.className).toBe("ewar-row ewar-row-inactive");
+    expect(row.className).toBe("modules-row modules-row-inactive");
   });
 
   test("capture and restore round-trip activations and selected scripts", () => {
@@ -185,10 +189,10 @@ describe("BoosterController", () => {
     controller.setLoadout("shipA", LOADOUT);
     const section = boosterEls.sections.shipA as unknown as FakeElement;
     const row = firstRow(section)!;
-    const gear = row.children.find((child) => child.className.split(" ").includes("ewar-script-gear"))!;
+    const gear = row.children.find((child) => child.className.split(" ").includes("script-gear"))!;
     gear.trigger("click");
     const popup = scriptPopupFor(document, "shipA")!;
-    const optimalOption = popup.children.find((child) => child.textContent?.includes(OPTIMAL_SCRIPT.name));
+    const optimalOption = findOptionByName(popup, OPTIMAL_SCRIPT.name);
     expect(optimalOption).toBeDefined();
     optimalOption!.trigger("click");
     expect(controller.capture("shipA")?.[0]?.script).toBe(OPTIMAL_SCRIPT.moduleId);
@@ -203,13 +207,36 @@ describe("BoosterController", () => {
     const button = row.children[0] as unknown as FakeElement;
     const nameSpan = button.children[1] as unknown as FakeElement;
     expect(button.getAttribute("data-value")).toBe(LOADOUT.computers[0].moduleId);
-    const gear = row.children.find((child) => child.className.split(" ").includes("ewar-script-gear"))!;
+    const gear = row.children.find((child) => child.className.split(" ").includes("script-gear"))!;
     gear.trigger("click");
     const popup = scriptPopupFor(document, "shipA")!;
-    const optimalOption = popup.children.find((child) => child.textContent?.includes(OPTIMAL_SCRIPT.name));
+    const optimalOption = findOptionByName(popup, OPTIMAL_SCRIPT.name);
     optimalOption!.trigger("click");
     expect(button.getAttribute("data-hint-content")).toBe("module");
     expect(button.getAttribute("data-value")).toBe(LOADOUT.computers[0].moduleId);
     expect(nameSpan.getAttribute("data-hint")).toBeNull();
+  });
+
+  test("module buttons carry the selected script id for the hint provider", () => {
+    const { controller, boosterEls, document } = buildBoosterController();
+    controller.setLoadout("shipA", LOADOUT);
+    const section = boosterEls.sections.shipA as unknown as FakeElement;
+    const rows = (section.children[0] as FakeElement).children.filter((child) => child.className.split(" ").includes("modules-row"));
+    const unscriptedButton = rows[0]!.children[0] as unknown as FakeElement;
+    expect(unscriptedButton.getAttribute("data-script")).toBeNull();
+    const scriptedButton = rows[1]!.children[0] as unknown as FakeElement;
+    expect(scriptedButton.getAttribute("data-script")).toBe(TRACKING_SCRIPT.moduleId);
+
+    const gear0 = rows[0]!.children.find((child) => child.className.split(" ").includes("script-gear"))!;
+    gear0.trigger("click");
+    const popup = scriptPopupFor(document, "shipA")!;
+    findOptionByName(popup, OPTIMAL_SCRIPT.name)!.trigger("click");
+    expect(unscriptedButton.getAttribute("data-script")).toBe(OPTIMAL_SCRIPT.moduleId);
+
+    const gear1 = rows[1]!.children.find((child) => child.className.split(" ").includes("script-gear"))!;
+    gear1.trigger("click");
+    const reopened = scriptPopupFor(document, "shipA")!;
+    reopened.children.find((child) => child.getAttribute("data-value") === "none")!.trigger("click");
+    expect(scriptedButton.getAttribute("data-script")).toBeNull();
   });
 });

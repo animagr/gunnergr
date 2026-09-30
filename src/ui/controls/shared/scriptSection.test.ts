@@ -57,7 +57,7 @@ function makeConfig(overrides?: Partial<ScriptSectionConfig<TestKey>>): ScriptSe
     mountEl,
     parentPopup,
     popupGroup,
-    listShape: { itemClass: "ewar-script-option", nameClass: "", role: "menuitem" },
+    listShape: { itemClass: "script-option", nameClass: "", role: "menuitem" },
     placement: "alongside-end",
     options: makeOptions(),
     onSelect: vi.fn(),
@@ -116,6 +116,40 @@ describe("ScriptSection", () => {
     const section = new ScriptSection(makeConfig());
     const gear = section.createGear({ index: 3 }, { hint: "None", dataIndex: 3 });
     expect(gear.getAttribute("data-index")).toBe("3");
+    void section;
+  });
+
+  test("createGear renders the script image when iconUrl is provided", () => {
+    const section = new ScriptSection(makeConfig());
+    const gear = section.createGear({ index: 0 }, { hint: "None", iconUrl: "/icons/script.png" });
+    const img = gear.children[0];
+    expect(img.tagName).toBe("IMG");
+    expect(img.getAttribute("src")).toBe("/icons/script.png");
+    void section;
+  });
+
+  test("createGear keeps the sprite when iconUrl is absent", () => {
+    const section = new ScriptSection(makeConfig());
+    const gear = section.createGear({ index: 0 }, { hint: "None" });
+    expect(gear.children).toHaveLength(0);
+    void section;
+  });
+
+  test("option click updates gear icon via gearIcon and restores sprite for none", () => {
+    const gearIcon = vi.fn((_key: TestKey, value: string) => (value === "none" ? undefined : `/icons/${value}.png`));
+    const config = makeConfig({ gearIcon });
+    const section = new ScriptSection(config);
+    const gear = section.createGear({ index: 0 }, { hint: "None" });
+    section.open({ index: 0 }, gear);
+    const popupEl = config.mountEl.children[0] as unknown as FakeElement;
+    const buttons = popupEl.children.filter((c) => (c as unknown as FakeElement).tagName === "BUTTON") as unknown as FakeElement[];
+    buttons[2].trigger("click");
+    expect(gearIcon).toHaveBeenCalledWith({ index: 0 }, "1002");
+    expect(gear.children[0].tagName).toBe("IMG");
+    expect(gear.children[0].getAttribute("src")).toBe("/icons/1002.png");
+    section.open({ index: 0 }, gear);
+    buttons[0].trigger("click");
+    expect(gear.children).toHaveLength(0);
     void section;
   });
 

@@ -34,6 +34,7 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
   private readonly events: UiEvents;
   private readonly describer: MissileBoosterEffectDescriber;
   private readonly states = new Map<Side, MissileBoosterState>();
+  private readonly moduleButtons = new Map<Side, HTMLButtonElement[]>();
   private readonly scriptSections: Record<Side, ScriptSection<number>>;
   private readonly overloadAction: IconActionImpl;
   private readonly sectionBlock: SectionBlockImpl;
@@ -48,7 +49,7 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
     this.events = deps.events;
     this.describer = deps.describer;
     this.overloadAction = new IconActionImpl({
-      buttonClass: "ewar-overload-button btn icon-button",
+      buttonClass: "modules-overload-button btn icon-button",
       iconSvg: spriteIcon("overload", 14, "currentColor", "overload-button-icon"),
       hint: "",
     });
@@ -114,11 +115,12 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
       mountEl: this.els.modulesFields[side],
       parentPopup: this.modulesPopup.popup(side),
       popupGroup: this.popupGroup,
-      listShape: { itemClass: "ewar-script-option", nameClass: "", role: "menuitem" },
+      listShape: { itemClass: "script-option", nameClass: "script-name", iconClass: "script-icon", role: "menuitem" },
       placement: side === "shipA" ? "alongside-end" : "alongside-start",
       options: (index) => this.buildScriptOptions(side, index),
       onSelect: (index, value) => this.onScriptSelected(side, index, value),
       gearHint: (index) => this.gearHintForSide(side, index),
+      gearIcon: (_index, value) => this.scriptIconForValue(side, value),
     });
   }
 
@@ -181,7 +183,7 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
 
   private appendSummaryItem(summary: HTMLElement, moduleId: TypeId, active: number, total: number, hint: string): void {
     const iconUrl = this.imageCatalog.itemIconUrl(moduleId);
-    const item = html`<span class="trigger-summary-item" data-hint=${hint}><img class="ewar-summary-icon" alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}><span class="trigger-summary-count mono">${active}/${total}</span></span>` as unknown as HTMLSpanElement;
+    const item = html`<span class="trigger-summary-item" data-hint=${hint}><img class="modules-summary-icon" alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}><span class="trigger-summary-count mono">${active}/${total}</span></span>` as unknown as HTMLSpanElement;
     summary.appendChild(item);
   }
 
@@ -208,17 +210,20 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
   }
 
   private renderComputers(side: Side, state: MissileBoosterState, section: HTMLElement): void {
+    this.moduleButtons.set(side, []);
     for (let i = 0; i < state.loadout.computers.length; i++) {
       const computer = state.loadout.computers[i];
       const activation = state.activation[i];
-      const row = html`<div class=${activation.active ? "ewar-row" : "ewar-row ewar-row-inactive"}></div>` as unknown as HTMLDivElement;
-      const button = this.createModuleButton(activation.active, computer);
+      const row = html`<div class=${activation.active ? "modules-row" : "modules-row modules-row-inactive"}></div>` as unknown as HTMLDivElement;
+      const button = this.createModuleButton(activation.active, computer, activation.script?.moduleId);
+      this.moduleButtons.get(side)![i] = button;
       button.addEventListener("click", () => this.toggleComputer(side, i, button, row));
       row.appendChild(button);
       const overloadButton = this.createOverloadButton(activation.active, activation.overloaded, i, computer, () => this.toggleComputerOverload(side, i, overloadButton));
       row.appendChild(overloadButton);
       const gear = this.scriptSections[side].createGear(i, {
         hint: this.gearHintForScript(activation.script),
+        iconUrl: this.scriptIconUrl(activation.script),
         disabled: !activation.active,
         dataIndex: i,
       });
@@ -231,7 +236,7 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
     for (let i = 0; i < state.loadout.enhancers.length; i++) {
       const enhancer = state.loadout.enhancers[i];
       const button = this.createEnhancerButton(enhancer);
-      const row = html`<div class="ewar-row"></div>` as unknown as HTMLDivElement;
+      const row = html`<div class="modules-row"></div>` as unknown as HTMLDivElement;
       row.appendChild(button);
       section.appendChild(row);
     }
@@ -246,18 +251,30 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
     return this.fittingImport.itemNameForId(script.moduleId, this.i18n.current());
   }
 
-  private createModuleButton(active: boolean, computer: MissileBoosterSpec): HTMLButtonElement {
+  private scriptIconUrl(script: MissileScriptSpec | undefined): string | undefined {
+    return script === undefined ? undefined : this.imageCatalog.itemIconUrl(script.moduleId);
+  }
+
+  private scriptIconForValue(side: Side, value: string): string | undefined {
+    const byId = typeIdFromString(value);
+    if (byId === undefined) return undefined;
+    const state = this.states.get(side);
+    if (!state) return undefined;
+    return this.scriptIconUrl(state.loadout.scripts.find((s) => s.moduleId === byId));
+  }
+
+  private createModuleButton(active: boolean, computer: MissileBoosterSpec, scriptId?: TypeId): HTMLButtonElement {
     const displayName = this.moduleDisplayName(computer);
     const iconUrl = this.imageCatalog.itemIconUrl(computer.moduleId);
     const nameSpan = html`<span class="truncate">${displayName}</span>` as unknown as HTMLSpanElement;
-    return html`<button type="button" class="ewar-module-toggle" aria-pressed=${String(active)} aria-label=${displayName} data-hint-content="module" data-value=${String(computer.moduleId)}><img alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}>${nameSpan}</button>` as unknown as HTMLButtonElement;
+    return html`<button type="button" class="modules-module-toggle" aria-pressed=${String(active)} aria-label=${displayName} data-hint-content="module" data-value=${String(computer.moduleId)} data-script=${scriptId === undefined ? undefined : String(scriptId)}><img alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}>${nameSpan}</button>` as unknown as HTMLButtonElement;
   }
 
   private createEnhancerButton(enhancer: MissileEnhancerSpec): HTMLButtonElement {
     const displayName = this.moduleDisplayName(enhancer);
     const iconUrl = this.imageCatalog.itemIconUrl(enhancer.moduleId);
     const nameSpan = html`<span class="truncate">${displayName}</span>` as unknown as HTMLSpanElement;
-    return html`<button type="button" class="ewar-module-toggle" aria-disabled="true" aria-label=${displayName} data-hint-content="module" data-value=${String(enhancer.moduleId)}><img alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}>${nameSpan}</button>` as unknown as HTMLButtonElement;
+    return html`<button type="button" class="modules-module-toggle" aria-disabled="true" aria-label=${displayName} data-hint-content="module" data-value=${String(enhancer.moduleId)}><img alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}>${nameSpan}</button>` as unknown as HTMLButtonElement;
   }
 
   private createOverloadButton(active: boolean, overloaded: boolean, index: number, spec: { readonly moduleId: TypeId }, onToggle: () => void): HTMLButtonElement {
@@ -291,6 +308,7 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
       ...state.loadout.scripts.map((script) => ({
         value: String(script.moduleId),
         label: `${this.scriptDisplayName(script)} · ${missileScriptStatSuffix(script)}`,
+        iconUrl: this.imageCatalog.itemIconUrl(script.moduleId),
         selected: current !== undefined && current.moduleId === script.moduleId,
       })),
     ];
@@ -308,8 +326,17 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
       if (script === undefined) return;
       state.activation[index].script = script;
     }
+    this.updateRowScriptAnchor(side, index);
     this.updateSummary(side);
     this.events.emitConfigInvalidated();
+  }
+
+  private updateRowScriptAnchor(side: Side, index: number): void {
+    const button = this.moduleButtons.get(side)?.[index];
+    if (button === undefined) return;
+    const scriptId = this.states.get(side)?.activation[index].script?.moduleId;
+    if (scriptId === undefined) button.removeAttribute("data-script");
+    else button.setAttribute("data-script", String(scriptId));
   }
 
   private toggleComputer(side: Side, index: number, button: HTMLButtonElement, row: HTMLElement): void {
@@ -318,7 +345,7 @@ export class MissileBoosterControllerImpl implements MissileBoosterController {
     const activation = state.activation[index];
     activation.active = !activation.active;
     button.setAttribute("aria-pressed", String(activation.active));
-    row.className = activation.active ? "ewar-row" : "ewar-row ewar-row-inactive";
+    row.className = activation.active ? "modules-row" : "modules-row modules-row-inactive";
     for (const child of row.children) {
       if (child instanceof HTMLButtonElement && child.getAttribute("data-index") === String(index)) {
         if (activation.active) child.removeAttribute("disabled");

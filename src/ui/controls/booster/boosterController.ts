@@ -33,6 +33,7 @@ export class BoosterControllerImpl implements BoosterController {
   private readonly i18n: I18n;
   private readonly events: UiEvents;
   private readonly states = new Map<Side, BoosterState>();
+  private readonly moduleButtons = new Map<Side, HTMLButtonElement[]>();
   private readonly scriptSections: Record<Side, ScriptSection<number>>;
   private readonly sectionBlock: SectionBlockImpl;
 
@@ -105,11 +106,12 @@ export class BoosterControllerImpl implements BoosterController {
       mountEl: this.els.modulesFields[side],
       parentPopup: this.modulesPopup.popup(side),
       popupGroup: this.popupGroup,
-      listShape: { itemClass: "ewar-script-option", nameClass: "", role: "menuitem" },
+      listShape: { itemClass: "script-option", nameClass: "script-name", iconClass: "script-icon", role: "menuitem" },
       placement: side === "shipA" ? "alongside-end" : "alongside-start",
       options: (index) => this.buildScriptOptions(side, index),
       onSelect: (index, value) => this.onScriptSelected(side, index, value),
       gearHint: (index) => this.gearHintForSide(side, index),
+      gearIcon: (_index, value) => this.scriptIconForValue(side, value),
     });
   }
 
@@ -176,7 +178,7 @@ export class BoosterControllerImpl implements BoosterController {
 
   private appendSummaryItem(summary: HTMLElement, moduleId: TypeId, active: number, total: number, hint: string): void {
     const iconUrl = this.imageCatalog.itemIconUrl(moduleId);
-    const item = html`<span class="trigger-summary-item" data-hint=${hint}><img class="ewar-summary-icon" alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}><span class="trigger-summary-count mono">${active}/${total}</span></span>` as unknown as HTMLSpanElement;
+    const item = html`<span class="trigger-summary-item" data-hint=${hint}><img class="modules-summary-icon" alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}><span class="trigger-summary-count mono">${active}/${total}</span></span>` as unknown as HTMLSpanElement;
     summary.appendChild(item);
   }
 
@@ -199,15 +201,18 @@ export class BoosterControllerImpl implements BoosterController {
   }
 
   private renderComputers(side: Side, state: BoosterState, section: HTMLElement): void {
+    this.moduleButtons.set(side, []);
     for (let i = 0; i < state.loadout.computers.length; i++) {
       const computer = state.loadout.computers[i];
       const activation = state.activation[i];
-      const row = html`<div class=${activation.active ? "ewar-row" : "ewar-row ewar-row-inactive"}></div>` as unknown as HTMLDivElement;
-      const button = this.createModuleButton(activation.active, computer);
+      const row = html`<div class=${activation.active ? "modules-row" : "modules-row modules-row-inactive"}></div>` as unknown as HTMLDivElement;
+      const button = this.createModuleButton(activation.active, computer, activation.script?.moduleId);
+      this.moduleButtons.get(side)![i] = button;
       button.addEventListener("click", () => this.toggleComputer(side, i, button, row));
       row.appendChild(button);
       const gear = this.scriptSections[side].createGear(i, {
         hint: this.gearHintForScript(activation.script),
+        iconUrl: this.scriptIconUrl(activation.script),
         disabled: !activation.active,
         dataIndex: i,
       });
@@ -225,11 +230,23 @@ export class BoosterControllerImpl implements BoosterController {
     return this.fittingImport.itemNameForId(script.moduleId, this.i18n.current());
   }
 
-  private createModuleButton(active: boolean, computer: TrackingBoosterSpec): HTMLButtonElement {
+  private scriptIconUrl(script: TurretScriptSpec | undefined): string | undefined {
+    return script === undefined ? undefined : this.imageCatalog.itemIconUrl(script.moduleId);
+  }
+
+  private scriptIconForValue(side: Side, value: string): string | undefined {
+    const byId = typeIdFromString(value);
+    if (byId === undefined) return undefined;
+    const state = this.states.get(side);
+    if (!state) return undefined;
+    return this.scriptIconUrl(state.loadout.scripts.find((s) => s.moduleId === byId));
+  }
+
+  private createModuleButton(active: boolean, computer: TrackingBoosterSpec, scriptId?: TypeId): HTMLButtonElement {
     const displayName = this.moduleDisplayName(computer);
     const iconUrl = this.imageCatalog.itemIconUrl(computer.moduleId);
     const nameSpan = html`<span class="truncate">${displayName}</span>` as unknown as HTMLSpanElement;
-    const button = html`<button type="button" class="ewar-module-toggle" aria-pressed=${String(active)} aria-label=${displayName} data-hint-content="module" data-value=${String(computer.moduleId)}><img alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}>${nameSpan}</button>` as unknown as HTMLButtonElement;
+    const button = html`<button type="button" class="modules-module-toggle" aria-pressed=${String(active)} aria-label=${displayName} data-hint-content="module" data-value=${String(computer.moduleId)} data-script=${scriptId === undefined ? undefined : String(scriptId)}><img alt="" src=${iconUrl} hidden=${iconUrl === undefined ? "" : false}>${nameSpan}</button>` as unknown as HTMLButtonElement;
     return button;
   }
 
@@ -253,6 +270,7 @@ export class BoosterControllerImpl implements BoosterController {
       ...state.loadout.scripts.map((script) => ({
         value: String(script.moduleId),
         label: `${this.scriptDisplayName(script)} · ${boosterScriptStatSuffix(script)}`,
+        iconUrl: this.imageCatalog.itemIconUrl(script.moduleId),
         selected: current !== undefined && current.moduleId === script.moduleId,
       })),
     ];
@@ -270,8 +288,17 @@ export class BoosterControllerImpl implements BoosterController {
       if (script === undefined) return;
       state.activation[index].script = script;
     }
+    this.updateRowScriptAnchor(side, index);
     this.updateSummary(side);
     this.events.emitConfigInvalidated();
+  }
+
+  private updateRowScriptAnchor(side: Side, index: number): void {
+    const button = this.moduleButtons.get(side)?.[index];
+    if (button === undefined) return;
+    const scriptId = this.states.get(side)?.activation[index].script?.moduleId;
+    if (scriptId === undefined) button.removeAttribute("data-script");
+    else button.setAttribute("data-script", String(scriptId));
   }
 
   private toggleComputer(side: Side, index: number, button: HTMLButtonElement, row: HTMLElement): void {
@@ -280,7 +307,7 @@ export class BoosterControllerImpl implements BoosterController {
     const activation = state.activation[index];
     activation.active = !activation.active;
     button.setAttribute("aria-pressed", String(activation.active));
-    row.className = activation.active ? "ewar-row" : "ewar-row ewar-row-inactive";
+    row.className = activation.active ? "modules-row" : "modules-row modules-row-inactive";
     this.renderSide(side);
     this.events.emitConfigInvalidated();
   }

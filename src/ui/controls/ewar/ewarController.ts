@@ -38,6 +38,8 @@ interface EwarRowRef {
   readonly row: HTMLDivElement;
   readonly stateLabel: HTMLSpanElement;
   readonly isActive: () => boolean;
+  readonly moduleButton: HTMLButtonElement | undefined;
+  readonly scriptId: (() => TypeId | undefined) | undefined;
 }
 
 type EwarScriptKey = { kind: "disruptor" | "dampener"; index: number };
@@ -68,7 +70,7 @@ export class EwarControllerImpl implements EwarController {
     this.ewarEffectDescriber = deps.ewarEffectDescriber;
     this.events = deps.events;
     this.overloadAction = new IconActionImpl({
-      buttonClass: "ewar-overload-button btn icon-button",
+      buttonClass: "modules-overload-button btn icon-button",
       iconSvg: spriteIcon("overload", 14, "currentColor", "overload-button-icon"),
       hint: "",
     });
@@ -153,15 +155,16 @@ export class EwarControllerImpl implements EwarController {
 
   private buildScriptSection(side: Side): ScriptSection<EwarScriptKey> {
     return new ScriptSection<EwarScriptKey>({
-      popupId: `${sideId(side)}-ewar-script-popup`,
+      popupId: `${sideId(side)}-script-popup`,
       mountEl: this.els[side].field,
       parentPopup: this.modulesPopup.popup(side),
       popupGroup: this.popupGroup,
-      listShape: { itemClass: "ewar-script-option", nameClass: "ewar-script-name", iconClass: "ewar-script-icon", role: "menuitem" },
+      listShape: { itemClass: "script-option", nameClass: "script-name", iconClass: "script-icon", role: "menuitem" },
       placement: side === "shipA" ? "alongside-end" : "alongside-start",
       options: (key) => this.buildScriptOptions(side, key),
       onSelect: (key, value) => this.onScriptSelected(side, key, value),
       gearHint: (key) => this.gearHintForSide(side, key),
+      gearIcon: (key, value) => this.scriptIconForValue(side, key, value),
       heading: (key) => this.headingForSide(side, key),
     });
   }
@@ -284,7 +287,7 @@ export class EwarControllerImpl implements EwarController {
 
   private appendSummaryItem(summary: HTMLElement, moduleId: TypeId, active: number, total: number, hint: string): void {
     const iconUrl = this.imageCatalog.itemIconUrl(moduleId);
-    const img = html`<img class="ewar-summary-icon" alt="" src=${iconUrl}>` as unknown as HTMLImageElement;
+    const img = html`<img class="modules-summary-icon" alt="" src=${iconUrl}>` as unknown as HTMLImageElement;
     if (iconUrl === undefined) img.hidden = true;
     const item = html`<span class="trigger-summary-item" data-hint=${hint}>${img}<span class="trigger-summary-count mono">${active}/${total}</span></span>`;
     summary.appendChild(item);
@@ -384,17 +387,18 @@ export class EwarControllerImpl implements EwarController {
     for (let i = 0; i < state.loadout.disruptors.length; i++) {
       const disruptor = state.loadout.disruptors[i];
       const activation = state.activation.disruptors[i];
-      const button = this.createModuleButton(activation.active, disruptor);
+      const button = this.createModuleButton(activation.active, disruptor, activation.script?.moduleId);
       const onToggle = () => this.toggleDisruptorOverload(side, i, overloadButton);
       const overloadButton = this.createOverloadButton(activation.active, activation.overloaded, i, disruptor, onToggle);
       const key: EwarScriptKey = { kind: "disruptor", index: i };
       const gear = this.scriptSections[side].createGear(key, {
         hint: this.gearHintForSide(side, key),
+        iconUrl: this.scriptIconUrl(activation.script),
         disabled: !activation.active,
         dataIndex: i,
       });
       button.addEventListener("click", () => this.toggleDisruptor(side, i, button));
-      section.appendChild(this.createRow(side, "disruptors", i, disruptor.moduleId, () => state.activation.disruptors[i].active, [button, overloadButton, gear]));
+      section.appendChild(this.createRow(side, "disruptors", i, disruptor.moduleId, () => state.activation.disruptors[i].active, [button, overloadButton, gear], button, () => state.activation.disruptors[i].script?.moduleId));
     }
   }
 
@@ -423,17 +427,18 @@ export class EwarControllerImpl implements EwarController {
     for (let i = 0; i < state.loadout.dampeners.length; i++) {
       const dampener: SensorDampenerSpec = state.loadout.dampeners[i];
       const activation = state.activation.dampeners[i];
-      const button = this.createModuleButton(activation.active, dampener);
+      const button = this.createModuleButton(activation.active, dampener, activation.script?.moduleId);
       const onToggle = () => this.toggleDampenerOverload(side, i, overloadButton);
       const overloadButton = this.createOverloadButton(activation.active, activation.overloaded, i, dampener, onToggle);
       const key: EwarScriptKey = { kind: "dampener", index: i };
       const gear = this.scriptSections[side].createGear(key, {
         hint: this.gearHintForSide(side, key),
+        iconUrl: this.scriptIconUrl(activation.script),
         disabled: !activation.active,
         dataIndex: i,
       });
       button.addEventListener("click", () => this.toggleDampener(side, i, button));
-      section.appendChild(this.createRow(side, "dampeners", i, dampener.moduleId, () => state.activation.dampeners[i].active, [button, overloadButton, gear]));
+      section.appendChild(this.createRow(side, "dampeners", i, dampener.moduleId, () => state.activation.dampeners[i].active, [button, overloadButton, gear], button, () => state.activation.dampeners[i].script?.moduleId));
     }
   }
 
@@ -465,10 +470,10 @@ export class EwarControllerImpl implements EwarController {
     }
   }
 
-  private createRow(side: Side, family: keyof MutableEwarActivation, index: number, moduleId: TypeId, isActive: () => boolean, controls: (Element | DocumentFragment)[]): HTMLDivElement {
-    const stateLabel = html`<span class="ewar-row-state" hidden></span>` as unknown as HTMLSpanElement;
-    const row = html`<div class="ewar-row">${[...controls, stateLabel]}</div>` as unknown as HTMLDivElement;
-    this.rowRefs.get(side)!.push({ family, index, moduleId, row, stateLabel, isActive });
+  private createRow(side: Side, family: keyof MutableEwarActivation, index: number, moduleId: TypeId, isActive: () => boolean, controls: (Element | DocumentFragment)[], moduleButton?: HTMLButtonElement, scriptId?: () => TypeId | undefined): HTMLDivElement {
+    const stateLabel = html`<span class="modules-row-state" hidden></span>` as unknown as HTMLSpanElement;
+    const row = html`<div class="modules-row">${[...controls, stateLabel]}</div>` as unknown as HTMLDivElement;
+    this.rowRefs.get(side)!.push({ family, index, moduleId, row, stateLabel, isActive, moduleButton, scriptId });
     return row;
   }
 
@@ -489,7 +494,7 @@ export class EwarControllerImpl implements EwarController {
   private applyRowState(side: Side, ref: EwarRowRef): void {
     const active = ref.isActive();
     const starved = active && this.starvedModuleIds[side].includes(ref.moduleId);
-    ref.row.className = !active ? "ewar-row ewar-row-inactive" : starved ? "ewar-row ewar-row-starved" : "ewar-row";
+    ref.row.className = !active ? "modules-row modules-row-inactive" : starved ? "modules-row modules-row-starved" : "modules-row";
     ref.stateLabel.hidden = !starved;
     ref.stateLabel.textContent = starved ? this.i18n.t("capacitor.insufficient") : "";
   }
@@ -503,13 +508,27 @@ export class EwarControllerImpl implements EwarController {
     return this.fittingImport.itemNameForId(script.moduleId, this.i18n.current());
   }
 
-  private createModuleButton(active: boolean, spec: { readonly moduleId: TypeId }): HTMLButtonElement {
+  private scriptIconUrl(script: { readonly moduleId: TypeId } | undefined): string | undefined {
+    return script === undefined ? undefined : this.imageCatalog.itemIconUrl(script.moduleId);
+  }
+
+  private scriptIconForValue(side: Side, key: EwarScriptKey, value: string): string | undefined {
+    if (value === "none") return undefined;
+    const byId = typeIdFromString(value);
+    if (byId === undefined) return undefined;
+    const state = this.states.get(side);
+    if (!state) return undefined;
+    const script = key.kind === "disruptor" ? state.loadout.scripts.find((s) => s.moduleId === byId) : state.loadout.dampenerScripts.find((s) => s.moduleId === byId);
+    return script === undefined ? undefined : this.imageCatalog.itemIconUrl(script.moduleId);
+  }
+
+  private createModuleButton(active: boolean, spec: { readonly moduleId: TypeId }, scriptId?: TypeId): HTMLButtonElement {
     const displayName = this.moduleDisplayName(spec);
     const iconUrl = this.imageCatalog.itemIconUrl(spec.moduleId);
-    const img = html`<img class="ewar-module-icon" alt="" src=${iconUrl}>` as unknown as HTMLImageElement;
+    const img = html`<img class="modules-module-icon" alt="" src=${iconUrl}>` as unknown as HTMLImageElement;
     if (iconUrl === undefined) img.hidden = true;
-    const nameSpan = html`<span class="ewar-module-name truncate">${displayName}</span>` as unknown as HTMLSpanElement;
-    return html`<button type="button" class="ewar-module-toggle" aria-pressed=${String(active)} aria-label=${displayName} data-hint-content="module" data-value=${String(spec.moduleId)}>${img}${nameSpan}</button>` as unknown as HTMLButtonElement;
+    const nameSpan = html`<span class="modules-module-name truncate">${displayName}</span>` as unknown as HTMLSpanElement;
+    return html`<button type="button" class="modules-module-toggle" aria-pressed=${String(active)} aria-label=${displayName} data-hint-content="module" data-value=${String(spec.moduleId)} data-script=${scriptId === undefined ? undefined : String(scriptId)}>${img}${nameSpan}</button>` as unknown as HTMLButtonElement;
   }
 
   private createOverloadButton(
@@ -582,8 +601,17 @@ export class EwarControllerImpl implements EwarController {
         state.activation.dampeners[key.index].script = script;
       }
     }
+    this.updateRowScriptAnchor(side, key.kind === "disruptor" ? "disruptors" : "dampeners", key.index);
     this.updateSummary(side);
     this.events.emitConfigInvalidated();
+  }
+
+  private updateRowScriptAnchor(side: Side, family: keyof MutableEwarActivation, index: number): void {
+    const ref = this.rowRefs.get(side)?.find((candidate) => candidate.family === family && candidate.index === index);
+    if (ref?.moduleButton === undefined || ref.scriptId === undefined) return;
+    const scriptId = ref.scriptId();
+    if (scriptId === undefined) ref.moduleButton.removeAttribute("data-script");
+    else ref.moduleButton.setAttribute("data-script", String(scriptId));
   }
 
   private gearHintForSide(side: Side, key: EwarScriptKey): string {
