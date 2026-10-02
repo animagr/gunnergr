@@ -44,6 +44,10 @@ export interface EngineEvents {
 export interface EngagementEngine {
   reset(config: EngineConfig): EngineView;
   update(config: EngineConfig): EngineView;
+  /** Steps the simulation without building or publishing a view; the view stays stale until publish. */
+  advance(dt: number): void;
+  /** Builds and publishes the view from the latest advanced state (or republishes the last view); returns it. */
+  publish(): EngineView;
   step(dt: number): EngineView;
   view(): EngineView;
   injectCapBooster(side: Side, boosterIndex: number): EngineView;
@@ -65,7 +69,9 @@ export class EngagementEngineImpl implements EngagementEngine {
   private readonly shipDestroyedListeners = new Set<(side: Side) => void>();
   private readonly destroyedSides = new Set<Side>();
   private config: EngineConfig | undefined;
+  private viewSpecs: ViewSpecs | undefined;
   private lastView: EngineView | undefined;
+  private pendingCompose: { composed: EngagementView; snapshot: SimSnapshot } | undefined;
   private projectionCache: Record<Side, InflictedDps> | undefined;
   private projectionAtTime = Number.NEGATIVE_INFINITY;
   private projectionDirty = true;
@@ -86,11 +92,13 @@ export class EngagementEngineImpl implements EngagementEngine {
 
   reset(config: EngineConfig): EngineView {
     this.config = config;
+    this.viewSpecs = viewSpecsFrom(config);
     this.destroyedSides.clear();
+    this.pendingCompose = undefined;
     this.live.simulation.reset(config.sim);
     const spawn = this.live.simulation.snapshot();
-    this.live.droneSimulator.reset(droneSimConfigFrom(config));
-    this.live.fighterSimulator.reset(fighterSimConfigFrom(config));
+    this.live.droneSimulator.reset(this.viewSpecs.drones);
+    this.live.fighterSimulator.reset(this.viewSpecs.fighters);
     this.live.missileSimulator.reset(missileSimConfigFrom(config), { shipA: spawn.shipA.position, shipB: spawn.shipB.position });
     this.live.weaponClock.reset();
     this.live.lockClock.reset();
@@ -106,9 +114,11 @@ export class EngagementEngineImpl implements EngagementEngine {
 
   update(config: EngineConfig): EngineView {
     this.config = config;
+    this.viewSpecs = viewSpecsFrom(config);
+    this.pendingCompose = undefined;
     this.live.simulation.update(config.sim);
-    this.live.droneSimulator.update(droneSimConfigFrom(config));
-    this.live.fighterSimulator.update(fighterSimConfigFrom(config));
+    this.live.droneSimulator.update(this.viewSpecs.drones);
+    this.live.fighterSimulator.update(this.viewSpecs.fighters);
     this.live.missileSimulator.update(missileSimConfigFrom(config));
     this.live.defenseSimulator.update(config.defense);
     this.live.capacitorSimulator.update(capacitorSimConfigFrom(config));
@@ -118,13 +128,25 @@ export class EngagementEngineImpl implements EngagementEngine {
     return this.lastView;
   }
 
-  step(dt: number): EngineView {
+  advance(dt: number): void {
     const config = this.config;
-    if (!config) throw new Error("EngagementEngine.step called before reset");
-    const { composed, snapshot } = this.runStep(this.live, config, dt);
-    this.lastView = this.buildView(composed, snapshot);
+    if (!config) throw new Error("EngagementEngine.advance called before reset");
+    this.pendingCompose = this.runStep(this.live, config, dt);
+  }
+
+  publish(): EngineView {
+    if (this.pendingCompose) {
+      this.lastView = this.buildView(this.pendingCompose.composed, this.pendingCompose.snapshot);
+      this.pendingCompose = undefined;
+    }
+    if (!this.lastView) throw new Error("EngagementEngine.publish called before reset");
     this.publishView(this.lastView);
     return this.lastView;
+  }
+
+  step(dt: number): EngineView {
+    this.advance(dt);
+    return this.publish();
   }
 
   view(): EngineView {
@@ -138,6 +160,7 @@ export class EngagementEngineImpl implements EngagementEngine {
     if (!this.config || !this.lastView) throw new Error("EngagementEngine.injectCapBooster called before reset");
     this.live.capacitorSimulator.injectBooster(side, boosterIndex);
     this.projectionDirty = true;
+    this.pendingCompose = undefined;
     this.lastView = { ...this.lastView, capacitorRuntime: this.live.capacitorSimulator.view() };
     this.publishView(this.lastView);
     return this.lastView;
@@ -175,8 +198,8 @@ export class EngagementEngineImpl implements EngagementEngine {
   }
 
   private buildView(composed: EngagementView, snapshot: SimSnapshot): EngineView {
-    const config = this.config;
-    if (!config) throw new Error("buildView called before config set");
+    const viewSpecs = this.viewSpecs;
+    if (!viewSpecs) throw new Error("buildView called before config set");
     const defenseRuntime = this.live.defenseSimulator.view();
     return {
       ...composed,
@@ -185,9 +208,9 @@ export class EngagementEngineImpl implements EngagementEngine {
       capacitorRuntime: this.live.capacitorSimulator.view(),
       inflicted: this.projectedInflicted(snapshot.time),
       drones: { shipA: this.live.droneSimulator.states("shipA"), shipB: this.live.droneSimulator.states("shipB") },
-      droneSpecs: { shipA: droneSpecsFrom(config.weapons.shipA), shipB: droneSpecsFrom(config.weapons.shipB) },
+      droneSpecs: viewSpecs.drones,
       fighters: { shipA: this.live.fighterSimulator.states("shipA"), shipB: this.live.fighterSimulator.states("shipB") },
-      fighterSpecs: { shipA: fighterSpecsFrom(config.weapons.shipA), shipB: fighterSpecsFrom(config.weapons.shipB) },
+      fighterSpecs: viewSpecs.fighters,
       missiles: { shipA: this.live.missileSimulator.states("shipA"), shipB: this.live.missileSimulator.states("shipB") },
     };
   }
@@ -385,7 +408,7 @@ export class EngagementEngineImpl implements EngagementEngine {
 
 /** A side whose ship is destroyed stops acting: it projects no ewar and every outgoing gate treats it as offline. */
 function operationalSides(defense: DefenseSimulator): Record<Side, boolean> {
-  const dead = defense.view().dead;
+  const dead = defense.deadSides();
   return { shipA: !dead.shipA, shipB: !dead.shipB };
 }
 
@@ -408,6 +431,16 @@ function fighterAliveCountsFor(world: SimWorld, side: Side): readonly number[] {
 
 function droneSimConfigFrom(config: EngineConfig): DroneSimConfig {
   return { shipA: droneSpecsFrom(config.weapons.shipA), shipB: droneSpecsFrom(config.weapons.shipB) };
+}
+
+/** Drone/fighter spec records the published view reuses across frames; derived once per config install. */
+interface ViewSpecs {
+  readonly drones: Record<Side, readonly DroneSpec[]>;
+  readonly fighters: Record<Side, readonly FighterSpec[]>;
+}
+
+function viewSpecsFrom(config: EngineConfig): ViewSpecs {
+  return { drones: droneSimConfigFrom(config), fighters: fighterSimConfigFrom(config) };
 }
 
 function fighterSimConfigFrom(config: EngineConfig): FighterSimConfig {
